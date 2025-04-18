@@ -1,0 +1,532 @@
+diff --git a/app/code/Magento/CompanyCustomerImportExport/Model/Export/Customer.php b/app/code/Magento/CompanyCustomerImportExport/Model/Export/Customer.php
+new file mode 100644
+index 000000000000..b6829718b935
+--- /dev/null
++++ b/app/code/Magento/CompanyCustomerImportExport/Model/Export/Customer.php
+@@ -0,0 +1,115 @@
++<?php
++/**
++ *
++ * ADOBE CONFIDENTIAL
++ * ___________________
++ *
++ * Copyright 2025 Adobe
++ * All Rights Reserved.
++ *
++ * NOTICE: All information contained herein is, and remains
++ * the property of Adobe and its suppliers, if any. The intellectual
++ * and technical concepts contained herein are proprietary to Adobe
++ * and its suppliers and are protected by all applicable intellectual
++ * property laws, including trade secret and copyright laws.
++ * Dissemination of this information or reproduction of this material
++ * is strictly forbidden unless prior written permission is obtained
++ * from Adobe.
++ */
++declare(strict_types=1);
++
++namespace Magento\CompanyCustomerImportExport\Model\Export;
++
++use Magento\CustomerImportExport\Model\Export\Customer as ExportCustomer;
++use Magento\Customer\Model\ResourceModel\Customer\CollectionFactory;
++use Magento\Store\Model\StoreManagerInterface;
++use Magento\ImportExport\Model\Export\Factory;
++use Magento\ImportExport\Model\ResourceModel\CollectionByPagesIteratorFactory;
++use Magento\Eav\Model\Config;
++use Magento\Framework\App\Config\ScopeConfigInterface;
++use Magento\Framework\Stdlib\DateTime\TimezoneInterface;
++
++/**
++ * Customer entity export with B2B attributes
++ */
++class Customer extends ExportCustomer
++{
++    private const COLUMN_STATUS = 'status';
++
++    /**
++     * @param ScopeConfigInterface $scopeConfig
++     * @param StoreManagerInterface $storeManager
++     * @param Factory $collectionFactory
++     * @param CollectionByPagesIteratorFactory $resourceColFactory
++     * @param TimezoneInterface $localeDate
++     * @param Config $eavConfig
++     * @param CollectionFactory $customerColFactory
++     * @param array $data
++     */
++    public function __construct(
++        ScopeConfigInterface $scopeConfig,
++        StoreManagerInterface $storeManager,
++        Factory $collectionFactory,
++        CollectionByPagesIteratorFactory $resourceColFactory,
++        TimezoneInterface $localeDate,
++        Config $eavConfig,
++        CollectionFactory $customerColFactory,
++        array $data = []
++    ) {
++        parent::__construct(
++            $scopeConfig,
++            $storeManager,
++            $collectionFactory,
++            $resourceColFactory,
++            $localeDate,
++            $eavConfig,
++            $customerColFactory,
++            $data
++        );
++
++        $this->_permanentAttributes[] = self::COLUMN_STATUS;
++    }
++
++    /**
++     * @inheritdoc
++     */
++    public function export() : string
++    {
++        $select = $this->_customerCollection->getSelect();
++        $table = $this->_customerCollection
++            ->getConnection()
++            ->getTableName('company_advanced_customer_entity');
++        $select->joinLeft(
++            ['company_customer' => $table],
++            'company_customer.customer_id = e.entity_id',
++            ['status' => 'company_customer.status']
++        );
++
++        return parent::export();
++    }
++
++    /**
++     * @inheritdoc
++     */
++    public function exportItem($item)
++    {
++        $row = $this->_addAttributeValuesToRow($item);
++        $row[self::COLUMN_WEBSITE] = $this->_websiteIdToCode[$item->getWebsiteId()];
++        $row[self::COLUMN_STORE] = $this->_storeIdToCode[$item->getStoreId()];
++        $row[self::COLUMN_STATUS] = $item->getData(self::COLUMN_STATUS);
++
++        if (isset($row['created_at'])) {
++            $row['created_at'] = $this->_localeDate
++                ->scopeDate(null, $item->getCreatedAt(), true)
++                ->format('Y-m-d H:i:s');
++        }
++
++        if (isset($row['updated_at'])) {
++            $row['updated_at'] = $this->_localeDate
++                ->scopeDate(null, $item->getUpdatedAt(), true)
++                ->format('Y-m-d H:i:s');
++        }
++
++        $this->getWriter()->writeRow($row);
++    }
++}
+diff --git a/app/code/Magento/CompanyCustomerImportExport/Model/Import/Customer.php b/app/code/Magento/CompanyCustomerImportExport/Model/Import/Customer.php
+index 13956936ddae..0e4725d8d064 100644
+--- a/app/code/Magento/CompanyCustomerImportExport/Model/Import/Customer.php
++++ b/app/code/Magento/CompanyCustomerImportExport/Model/Import/Customer.php
+@@ -18,13 +18,94 @@
+ 
+ namespace Magento\CompanyCustomerImportExport\Model\Import;
+ 
++use Magento\Framework\Stdlib\StringUtils;
++use Magento\Framework\App\Config\ScopeConfigInterface;
++use Magento\Framework\App\ResourceConnection;
++use Magento\ImportExport\Model\ImportFactory;
++use Magento\ImportExport\Model\ResourceModel\Helper;
++use Magento\ImportExport\Model\Import\ErrorProcessing\ProcessingErrorAggregatorInterface;
++use Magento\ImportExport\Model\Export\Factory;
++use Magento\Store\Model\StoreManagerInterface;
++use Magento\Eav\Model\Config;
++use Magento\Customer\Model\ResourceModel\Attribute\CollectionFactory;
++use Magento\Customer\Model\CustomerFactory;
++use Magento\Customer\Model\Indexer\Processor;
+ use Magento\CustomerImportExport\Model\Import\Customer as ImportCustomer;
++use Magento\CustomerImportExport\Model\ResourceModel\Import\Customer\StorageFactory;
+ 
+ /**
+  * Customer entity import with B2B attributes
++ *
++ * @SuppressWarnings(PHPMD.CouplingBetweenObjects)
+  */
+ class Customer extends ImportCustomer
+ {
++    private const COLUMN_STATUS = 'status';
++
++    public const ERROR_INVALID_STATUS = 'invalidStatus';
++
++    /**
++     * @var array
++     */
++    private array $importedStatuses = [];
++
++    /**
++     * @param StringUtils $string
++     * @param ScopeConfigInterface $scopeConfig
++     * @param ImportFactory $importFactory
++     * @param Helper $resourceHelper
++     * @param ResourceConnection $resource
++     * @param ProcessingErrorAggregatorInterface $errorAggregator
++     * @param StoreManagerInterface $storeManager
++     * @param Factory $collectionFactory
++     * @param Config $eavConfig
++     * @param StorageFactory $storageFactory
++     * @param CollectionFactory $attrCollectionFactory
++     * @param CustomerFactory $customerFactory
++     * @param array $data
++     * @param Processor $indexerProcessor
++     * @SuppressWarnings(PHPMD.ExcessiveParameterList)
++     */
++    public function __construct(
++        StringUtils $string,
++        ScopeConfigInterface $scopeConfig,
++        ImportFactory $importFactory,
++        Helper $resourceHelper,
++        ResourceConnection $resource,
++        ProcessingErrorAggregatorInterface $errorAggregator,
++        StoreManagerInterface $storeManager,
++        Factory $collectionFactory,
++        Config $eavConfig,
++        StorageFactory $storageFactory,
++        CollectionFactory $attrCollectionFactory,
++        CustomerFactory $customerFactory,
++        array $data = [],
++        ?Processor $indexerProcessor = null
++    ) {
++        parent::__construct(
++            $string,
++            $scopeConfig,
++            $importFactory,
++            $resourceHelper,
++            $resource,
++            $errorAggregator,
++            $storeManager,
++            $collectionFactory,
++            $eavConfig,
++            $storageFactory,
++            $attrCollectionFactory,
++            $customerFactory,
++            $data,
++            $indexerProcessor
++        );
++
++        $this->_specialAttributes[] = self::COLUMN_STATUS;
++        $this->addMessageTemplate(
++            self::ERROR_INVALID_STATUS,
++            __('Invalid value in Status column (status does not exists?)')
++        );
++    }
++
+     /**
+      * Override parent class method to process default status as active
+      *
+@@ -43,7 +124,9 @@ protected function _saveCustomerEntities(array $entitiesToCreate, array $entitie
+             $idsToProcess[] = $entity['entity_id'];
+         }
+         $idsToProcess = array_unique($idsToProcess);
+-        $this->processDefaultStatus($idsToProcess);
++        if (!empty($idsToProcess)) {
++            $this->processStatus($idsToProcess);
++        }
+         return $result;
+     }
+ 
+@@ -53,13 +136,112 @@ protected function _saveCustomerEntities(array $entitiesToCreate, array $entitie
+      * @param array $idsToProcess
+      * @return void
+      */
+-    private function processDefaultStatus(array $idsToProcess) : void
++    private function processStatus(array $idsToProcess) : void
+     {
+-        $select = $this->_connection->select();
++        $select = clone $this->_connection->select();
+         $table = $this->_connection->getTableName('company_advanced_customer_entity');
+         $select->from($table, 'customer_id')->where('customer_id IN (?)', $idsToProcess);
+         $ids = $this->_connection->fetchCol($select);
++        $idsWithStatus = array_keys($this->importedStatuses);
+         $nonExistingIds = array_diff($idsToProcess, $ids);
+-        $this->_connection->insertArray($table, ['customer_id'], $nonExistingIds);
++        if (!empty($nonExistingIds)) {
++            $idsWithDefaultStatus = array_diff($nonExistingIds, $idsWithStatus);
++            if (!empty($idsWithDefaultStatus)) {
++                $this->_connection->insertArray($table, ['customer_id'], $idsWithDefaultStatus);
++            }
++            $idsToInsert = array_diff($nonExistingIds, $idsWithDefaultStatus);
++            $idsInactive = $this->getInactiveIds($idsToInsert);
++            $idsActive = $this->getActiveIds($idsToInsert);
++            if (!empty($idsActive)) {
++                $this->_connection->insertArray($table, ['customer_id'], $idsActive);
++            }
++            if (!empty($idsInactive)) {
++                $data = [];
++                foreach ($idsInactive as $id) {
++                    $data[] = [$id, 0];
++                }
++                $this->_connection->insertArray($table, ['customer_id', 'status'], $data);
++            }
++        }
++        $idsToUpdate = array_diff($idsWithStatus, $nonExistingIds);
++        foreach ($idsToUpdate as $id) {
++            $this->_connection->update(
++                $table,
++                ['status' => $this->importedStatuses[$id]],
++                ["customer_id = ?" => (int)$id]
++            );
++        }
++    }
++
++    /**
++     * Get entities with inactive status
++     *
++     * @param array $ids
++     * @return array
++     */
++    private function getInactiveIds(array $ids) : array
++    {
++        $result = [];
++        foreach ($ids as $id) {
++            if ((int)$this->importedStatuses[$id] === 0) {
++                $result[] = $id;
++            }
++        }
++        return $result;
++    }
++
++    /**
++     * Get entities with active status
++     *
++     * @param array $ids
++     * @return array
++     */
++    private function getActiveIds(array $ids) : array
++    {
++        $result = [];
++        foreach ($ids as $id) {
++            if ((int)$this->importedStatuses[$id] !== 0) {
++                $result[] = $id;
++            }
++        }
++        return $result;
++    }
++
++    /**
++     * @inheritdoc
++     */
++    protected function _prepareDataForUpdate(array $rowData) : array
++    {
++        $result = parent::_prepareDataForUpdate($rowData);
++        if (isset($rowData[self::COLUMN_STATUS]) &&
++            ((int)$rowData[self::COLUMN_STATUS] === 1 || (int)$rowData[self::COLUMN_STATUS] === 0)) {
++            if (!empty($result[self::ENTITIES_TO_UPDATE_KEY][0])) {
++                $entityId = (int)$result[self::ENTITIES_TO_UPDATE_KEY][0]['entity_id'];
++                if ($entityId) {
++                    $this->importedStatuses[$entityId] = $rowData[self::COLUMN_STATUS];
++                }
++            }
++            if (!empty($result[self::ENTITIES_TO_CREATE_KEY][0])) {
++                $entityId = (int)$result[self::ENTITIES_TO_CREATE_KEY][0]['entity_id'];
++                if ($entityId) {
++                    $this->importedStatuses[$entityId] = $rowData[self::COLUMN_STATUS];
++                }
++            }
++        }
++        return $result;
++    }
++
++    /**
++     * @inheritdoc
++     */
++    protected function _validateRowForUpdate(array $rowData, $rowNumber)
++    {
++        parent::_validateRowForUpdate($rowData, $rowNumber);
++        if (isset($rowData[self::COLUMN_STATUS])) {
++            $status = (int)$rowData[self::COLUMN_STATUS];
++            if ($status !== 0 && $status !== 1) {
++                $this->addRowError(self::ERROR_INVALID_STATUS, $rowNumber);
++            }
++        }
+     }
+ }
+diff --git a/app/code/Magento/CompanyCustomerImportExport/Test/Integration/Model/Import/CustomerTest.php b/app/code/Magento/CompanyCustomerImportExport/Test/Integration/Model/Import/CustomerTest.php
+index 30601908e3c8..2631bdbfb121 100644
+--- a/app/code/Magento/CompanyCustomerImportExport/Test/Integration/Model/Import/CustomerTest.php
++++ b/app/code/Magento/CompanyCustomerImportExport/Test/Integration/Model/Import/CustomerTest.php
+@@ -38,11 +38,6 @@
+  */
+ class CustomerTest extends TestCase
+ {
+-    /**
+-     * @var Customer
+-     */
+-    private $model;
+-
+     /**
+      * @var Processor
+      */
+@@ -81,8 +76,6 @@ protected function setUp(): void
+         parent::setUp();
+ 
+         $objectManager = Bootstrap::getObjectManager();
+-        $this->model = $objectManager->get(Customer::class);
+-        $this->model->setParameters(['behavior' => Import::BEHAVIOR_ADD_UPDATE]);
+         $this->processor = $objectManager->get(Processor::class);
+         $filesystem = $objectManager->create(Filesystem::class);
+         $this->directoryWrite = $filesystem->getDirectoryWrite(DirectoryList::ROOT);
+@@ -92,6 +85,31 @@ protected function setUp(): void
+         $this->connection = $objectManager->get(ResourceConnection::class);
+     }
+ 
++    /**
++     * @magentoAppArea adminhtml
++     */
++    public function testImportDataWithStatus(): void
++    {
++        $source = new Csv(
++            __DIR__ . '/_files/customers_with_status.csv',
++            $this->directoryWrite
++        );
++        $objectManager = Bootstrap::getObjectManager();
++        $model = $objectManager->get(Customer::class);
++        $model->setParameters(['behavior' => Import::BEHAVIOR_ADD_UPDATE])
++            ->setSource($source)
++            ->validateData()
++            ->hasToBeTerminated();
++        $model->importData();
++
++        $customer = $this->customerRepository->get('david.lamar@example.com');
++        $this->assertNotNull($customer);
++        $this->assertEquals(
++            CompanyCustomerInterface::STATUS_INACTIVE,
++            $this->getCustomerStatus((int)$customer->getId())
++        );
++    }
++
+     /**
+      * @magentoAppArea adminhtml
+      */
+@@ -101,20 +119,75 @@ public function testImportData(): void
+             __DIR__ . '/_files/customers.csv',
+             $this->directoryWrite
+         );
+-        $this->model->setParameters(['behavior' => Import::BEHAVIOR_ADD_UPDATE])
++        $objectManager = Bootstrap::getObjectManager();
++        $model = $objectManager->get(Customer::class);
++        $model->setParameters(['behavior' => Import::BEHAVIOR_ADD_UPDATE])
+             ->setSource($source)
+             ->validateData()
+             ->hasToBeTerminated();
+-        $this->model->importData();
++        $model->importData();
+ 
+         $customer = $this->customerRepository->get('customer@example.com');
+         $this->assertNotNull($customer);
++        $this->assertEquals(
++            CompanyCustomerInterface::STATUS_ACTIVE,
++            $this->getCustomerStatus((int)$customer->getId())
++        );
++    }
+ 
++    /**
++     * Get customer status from database after import
++     *
++     * @param int $customerId
++     * @return int
++     */
++    private function getCustomerStatus(int $customerId) : int
++    {
++        $status =  0;
+         $connection = $this->connection->getConnection();
+         $table = $connection->getTableName('company_advanced_customer_entity');
+-        $select = $connection->select();
+-        $select->from($table, 'status')->where('customer_id = ?', $customer->getId());
++        $select = clone $connection->select();
++        $select->from($table, 'status')->where('customer_id = ?', $customerId);
+         $result = $connection->fetchCol($select);
+-        $this->assertEquals(CompanyCustomerInterface::STATUS_ACTIVE, $result[0]);
++        if (!empty($result[0])) {
++            $status = (int)$result[0];
++        }
++        return $status;
++    }
++
++    /**
++     * @magentoAppArea adminhtml
++     */
++    public function testStatusValidation(): void
++    {
++        $objectManager = Bootstrap::getObjectManager();
++        $model = $objectManager->create(Customer::class);
++        $model->setParameters(['behavior' => Import::BEHAVIOR_ADD_UPDATE]);
++        $model->getErrorAggregator()->clear();
++        $validation = $model->validateRow(
++            [
++                '_website' => 'base',
++                'email' => 'david.lamar@example.com',
++                'firstname' => 'David',
++                'group_id' => 1,
++                'lastname' => 'Lamar',
++                'status' => 1
++            ],
++            1
++        );
++        $this->assertTrue($validation);
++        $model->getErrorAggregator()->clear();
++        $validation = $model->validateRow(
++            [
++                '_website' => 'base',
++                'email' => 'david.lamar@example.com',
++                'firstname' => 'David',
++                'group_id' => 1,
++                'lastname' => 'Lamar',
++                'status' => 42
++            ],
++            2
++        );
++        $this->assertFalse($validation);
+     }
+ }
+diff --git a/app/code/Magento/CompanyCustomerImportExport/Test/Integration/Model/Import/_files/customers_with_status.csv b/app/code/Magento/CompanyCustomerImportExport/Test/Integration/Model/Import/_files/customers_with_status.csv
+new file mode 100644
+index 000000000000..dcb916ec203d
+--- /dev/null
++++ b/app/code/Magento/CompanyCustomerImportExport/Test/Integration/Model/Import/_files/customers_with_status.csv
+@@ -0,0 +1,7 @@
++email,_website,_store,status,confirmation,created_at,created_in,default_billing,default_shipping,disable_auto_group_change,dob,firstname,gender,group_id,lastname,middlename,password_hash,prefix,rp_token,rp_token_created_at,store_id,suffix,taxvat,website_id,password
++AnthonyANealy@magento.com,base,admin,1,,5/6/2012 15:53,Admin,1,1,0,5/6/2010,Anthony,Male,1,Nealy,A.,6a9c9bfb2ba88a6ad2a64e7402df44a763e0c48cd21d7af9e7e796cd4677ee28:RF,,,,0,,,1,
++LoriBBanks@magento.com,admin,admin,1,,5/6/2012 15:59,Admin,3,3,0,5/6/2010,Lori,Female,1,Banks,B.,7ad6dbdc83d3e9f598825dc58b84678c7351e4281f6bc2b277a32dcd88b9756b:pz,,,,0,,,0,
++CharlesTAlston@teleworm.us,base,admin,1,,5/6/2012 16:13,Admin,4,4,0,,Jhon,Female,1,Doe,T.,145d12bfff8a6a279eb61e277e3d727c0ba95acc1131237f1594ddbb7687a564:l1,,,,0,,,2,
++customer@example.com,base,admin,1,,5/6/2012 16:15,Admin,4,4,0,,Firstname,Male,1,Lastname,T.,145d12bfff8a6a279eb61e277e3d727c0ba95acc1131237f1594ddbb7687a564:l1,,,,0,,,2,
++julie.worrell@example.com,base,admin,1,,5/6/2012 16:19,Admin,4,4,0,,Julie,Female,1,Worrell,T.,145d12bfff8a6a279eb61e277e3d727c0ba95acc1131237f1594ddbb7687a564:l1,,,,0,,,2,
++david.lamar@example.com,base,admin,0,,5/6/2012 16:25,Admin,4,4,0,,David,,1,Lamar,T.,145d12bfff8a6a279eb61e277e3d727c0ba95acc1131237f1594ddbb7687a564:l1,,,,0,,,2,
+diff --git a/app/code/Magento/CompanyCustomerImportExport/composer.json b/app/code/Magento/CompanyCustomerImportExport/composer.json
+index 7a3c10144eb6..8e5c7a2bf599 100644
+--- a/app/code/Magento/CompanyCustomerImportExport/composer.json
++++ b/app/code/Magento/CompanyCustomerImportExport/composer.json
+@@ -7,7 +7,11 @@
+     "require": {
+         "php": "~8.1.0||~8.2.0||~8.3.0||~8.4.0",
+         "magento/framework": "*",
+-        "magento/module-customer-import-export": "*"
++        "magento/module-customer-import-export": "*",
++        "magento/module-customer": "*",
++        "magento/module-store": "*",
++        "magento/module-eav": "*",
++        "magento/module-import-export": "*"
+     },
+     "type": "magento2-module",
+     "license": [
+diff --git a/app/code/Magento/CompanyCustomerImportExport/etc/di.xml b/app/code/Magento/CompanyCustomerImportExport/etc/di.xml
+index 7fe76abd1f58..20314f438758 100644
+--- a/app/code/Magento/CompanyCustomerImportExport/etc/di.xml
++++ b/app/code/Magento/CompanyCustomerImportExport/etc/di.xml
+@@ -18,4 +18,5 @@
+   ***************************************************************************-->
+ <config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:ObjectManager/etc/config.xsd">
+     <preference for="Magento\CustomerImportExport\Model\Import\Customer" type="Magento\CompanyCustomerImportExport\Model\Import\Customer"/>
++    <preference for="Magento\CustomerImportExport\Model\Export\Customer" type="Magento\CompanyCustomerImportExport\Model\Export\Customer"/>
+ </config>
+diff --git a/app/code/Magento/CompanyCustomerImportExport/i18n/en_US.csv b/app/code/Magento/CompanyCustomerImportExport/i18n/en_US.csv
+new file mode 100644
+index 000000000000..7cd8be5ebd7a
+--- /dev/null
++++ b/app/code/Magento/CompanyCustomerImportExport/i18n/en_US.csv
+@@ -0,0 +1 @@
++"Invalid value in Status column (status does not exists?)","Invalid value in Status column (status does not exists?)"
