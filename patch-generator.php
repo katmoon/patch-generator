@@ -5,6 +5,17 @@ require_once __DIR__ . '/vendor/autoload.php';
 
 use PatchGenerator\PatchGenerator;
 
+function showHelp() {
+    echo "Usage: php patch-generator.php <ticket-id> [options]\n\n";
+    echo "Options:\n";
+    echo "  -h, --help            Show this help message\n";
+    echo "  -v, --patch-version   Specify patch version\n";
+    echo "  -g, --git-pr          Specify git PR\n\n";
+    echo "Example:\n";
+    echo "  php patch-generator.php ABC-123 -v 2 -g 'https://github.com/org/magento2ce/pull/123 https://github.com/org/magento2ee/pull/456' \n";
+    exit(0);
+}
+
 // Parse command line arguments
 $args = array_slice($GLOBALS['argv'], 1); // Skip script name
 $ticketId = null;
@@ -13,7 +24,9 @@ $gitPrs = null;
 
 for ($i = 0; $i < count($args); $i++) {
     $arg = $args[$i];
-    if ($arg === '-v' || $arg === '--patch-version') {
+    if ($arg === '-h' || $arg === '--help') {
+        showHelp();
+    } elseif ($arg === '-v' || $arg === '--patch-version') {
         $patchVersion = $args[++$i] ?? '';
     } elseif ($arg === '-g' || $arg === '--git-pr') {
         $gitPrs = $args[++$i] ?? null;

@@ -109,7 +109,7 @@ class PatchGenerator
                 echo $this->gitPrs . PHP_EOL;
                 echo str_repeat("-", 80) . PHP_EOL . PHP_EOL;
                 if (empty($this->gitPrs)) {
-                    throw new Exception('No pull request URLs found in the ticket');
+                    throw new Exception('No pull request URLs found in the ticket. Use -g to specify git PRs.');
                 }
             }
 
