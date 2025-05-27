@@ -229,8 +229,12 @@ class PatchGenerator
             throw new Exception("Directory is not writable: " . dirname($gitPatchFile));
         }
 
-        // Write all collected patch contents to file
-        file_put_contents($gitPatchFile, implode("\n", $patchContents));
+        // Write all collected patch contents to file, ensuring there's a newline at the end
+        $content = implode("\n", $patchContents);
+        if (substr($content, -1) !== "\n") {
+            $content .= "\n";
+        }
+        file_put_contents($gitPatchFile, $content);
 
         $this->convertToComposer($gitPatchFile, $composerPatchFile);
         $this->cleanupTemporaryFiles($gitPatchFile);
