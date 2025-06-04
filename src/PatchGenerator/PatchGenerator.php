@@ -146,7 +146,7 @@ class PatchGenerator
         curl_close($ch);
 
         if ($response === false) {
-            throw new Exception("cURL error: {$error}");
+            throw new Exception("\ncURL error: {$error}\n\nIs your VPN on?");
         }
 
         if ($httpCode !== 200) {
