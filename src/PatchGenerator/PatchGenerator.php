@@ -150,6 +150,9 @@ class PatchGenerator
         }
 
         if ($httpCode !== 200) {
+            if ($httpCode === 401) {
+                throw new Exception("Jira authentication failed (HTTP 401). Please check your JIRA_USER and JIRA_PASS in the .env file.");
+            }
             throw new Exception("Jira API returned HTTP code: {$httpCode}");
         }
 
@@ -276,6 +279,9 @@ class PatchGenerator
 
         if ($httpCode !== 200 || $prInfo === false) {
             $error = curl_error($ch);
+            if ($httpCode === 401) {
+                throw new Exception("GitHub authentication failed (HTTP 401). Please check your GIT_TOKEN in the .env file and make sure it has the necessary permissions to access the repository.");
+            }
             throw new Exception("Failed to get PR info: " . ($error ?: "HTTP code: {$httpCode}"));
         }
 
