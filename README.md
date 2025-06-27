@@ -38,7 +38,7 @@ Environment variables can also be set directly in the shell or through your syst
 ## Usage
 
 ```sh
-php patch-generator.php JIRA-123 [-v|--patch-version VERSION] [-g|--git-pr PR_URL]
+php patch-generator.php JIRA-123 [-v|--patch-version VERSION] [-g|--git-pr PR_URL] [--with-tests]
 ```
 
 ### Arguments
@@ -50,6 +50,7 @@ php patch-generator.php JIRA-123 [-v|--patch-version VERSION] [-g|--git-pr PR_UR
   - Version 1 is ignored (no suffix added)
 - `-g, --git-pr=URLS`: Comma-separated list of GitHub PR URLs (optional)
   - If provided, these PRs will be used instead of those from the Jira ticket
+- `--with-tests`: Leave the test files in the patch (optional)
 
 ### Examples
 
