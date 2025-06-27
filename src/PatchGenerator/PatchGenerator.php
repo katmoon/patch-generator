@@ -14,18 +14,21 @@ class PatchGenerator
     private ?string $gitPrs;
     private array $jiraResponse;
     private array $excludedPaths;
+    private bool $withTests;
 
     public function __construct(
         array $env = [],
         string $ticketId = '',
         string $patchVersion = '',
-        ?string $gitPrs = null
+        ?string $gitPrs = null,
+        bool $withTests = false
     ) {
         $this->env = array_merge($this->loadEnv(), $env);
         $this->validateEnv();
         $this->ticketId = $ticketId;
         $this->patchVersion = $this->normalizeVersion($patchVersion);
         $this->gitPrs = $gitPrs;
+        $this->withTests = $withTests;
         $this->jiraResponse = [];
         $this->excludedPaths = $this->parseExcludedPaths($this->env['EXCLUDED_PATHS'] ?? null);
     }
@@ -324,6 +327,10 @@ class PatchGenerator
 
     public function filterPatchContent(string $content): string
     {
+        if ($this->withTests) {
+            return $content;
+        }
+
         if (empty($this->excludedPaths)) {
             return $content;
         }

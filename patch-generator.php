@@ -10,8 +10,9 @@ function showHelp() {
     echo "Options:\n";
     echo "  -h, --help            Show this help message\n";
     echo "  -v, --patch-version   Specify patch version\n";
-    echo "  -g, --git-pr          Specify git PR\n\n";
-    echo "Example:\n";
+    echo "  -g, --git-pr          Specify git PR\n";
+    echo "  --with-tests          Ddon't exclude tests\n";
+    echo "\nExample:\n";
     echo "  php patch-generator.php ABC-123 -v 2 -g 'https://github.com/org/magento2ce/pull/123 https://github.com/org/magento2ee/pull/456' \n";
     exit(0);
 }
@@ -21,6 +22,7 @@ $args = array_slice($GLOBALS['argv'], 1); // Skip script name
 $ticketId = null;
 $patchVersion = '';
 $gitPrs = null;
+$withTests = false;
 
 for ($i = 0; $i < count($args); $i++) {
     $arg = $args[$i];
@@ -30,6 +32,8 @@ for ($i = 0; $i < count($args); $i++) {
         $patchVersion = $args[++$i] ?? '';
     } elseif ($arg === '-g' || $arg === '--git-pr') {
         $gitPrs = $args[++$i] ?? null;
+    } elseif ($arg === '--with-tests') {
+        $withTests = true;
     } elseif ($arg[0] !== '-') {
         $ticketId = $arg;
     }
@@ -40,7 +44,7 @@ if (!$ticketId) {
 }
 
 try {
-    $patchGenerator = new PatchGenerator([], $ticketId, $patchVersion, $gitPrs);
+    $patchGenerator = new PatchGenerator([], $ticketId, $patchVersion, $gitPrs, $withTests);
     $patchGenerator->generate();
 } catch (\Exception $e) {
     die("Error: " . $e->getMessage() . "\n");
