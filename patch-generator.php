@@ -24,6 +24,8 @@ $patchVersion = '';
 $gitPrs = null;
 $withTests = false;
 
+$nonOptionArgs = [];
+
 for ($i = 0; $i < count($args); $i++) {
     $arg = $args[$i];
     if ($arg === '-h' || $arg === '--help') {
@@ -35,13 +37,18 @@ for ($i = 0; $i < count($args); $i++) {
     } elseif ($arg === '--with-tests') {
         $withTests = true;
     } elseif ($arg[0] !== '-') {
-        $ticketId = $arg;
+        $nonOptionArgs[] = $arg;
     }
 }
 
-if (!$ticketId) {
+if (count($nonOptionArgs) === 0) {
     die("Error: Jira ticket ID is required\n");
 }
+if (count($nonOptionArgs) > 1) {
+    echo "Error: Only one ticket ID is allowed\n\n";
+    showHelp();
+}
+$ticketId = $nonOptionArgs[0];
 
 try {
     $patchGenerator = new PatchGenerator([], $ticketId, $patchVersion, $gitPrs, $withTests);
