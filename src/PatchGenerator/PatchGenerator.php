@@ -104,6 +104,7 @@ class PatchGenerator
     public function generate(): string
     {
         try {
+            $this->verifyJiraConnection();
             $this->fetchJiraTicket();
             if (empty($this->gitPrs)) {
                 echo PHP_EOL . "Collecting PRs from ticket {$this->ticketId}:" . PHP_EOL;
@@ -125,6 +126,34 @@ class PatchGenerator
         }
 
         return $composerPatchFile;
+    }
+
+    private function verifyJiraConnection(): void
+    {
+        $url = $this->env['JIRA_HOST'] . '/rest/api/2/myself';
+        $ch = curl_init($url);
+        if ($ch === false) {
+            throw new Exception('Failed to initialize cURL for Jira connection check');
+        }
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+            CURLOPT_USERPWD => $this->env['JIRA_USER'] . ':' . $this->env['JIRA_PASS'],
+            CURLOPT_HTTPAUTH => CURLAUTH_BASIC
+        ]);
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $error = curl_error($ch);
+        curl_close($ch);
+        if ($response === false) {
+            throw new Exception("\ncURL error during Jira connection check: {$error}\n\nIs your VPN on?");
+        }
+        if ($httpCode === 401) {
+            throw new Exception("Jira authentication failed (HTTP 401) during connection check. Please check your JIRA_USER and JIRA_PASS in the .env file.");
+        }
+        if ($httpCode !== 200) {
+            throw new Exception("Failed to connect to Jira API (HTTP {$httpCode}) during connection check. Please verify JIRA_HOST and your network connection.");
+        }
     }
 
     private function fetchJiraTicket(): void
@@ -155,6 +184,9 @@ class PatchGenerator
         if ($httpCode !== 200) {
             if ($httpCode === 401) {
                 throw new Exception("Jira authentication failed (HTTP 401). Please check your JIRA_USER and JIRA_PASS in the .env file.");
+            }
+            if ($httpCode === 404) {
+                throw new Exception("Jira ticket '{$this->ticketId}' not found (HTTP 404). Please check that the ticket ID is correct and exists in Jira.");
             }
             throw new Exception("Jira API returned HTTP code: {$httpCode}");
         }
