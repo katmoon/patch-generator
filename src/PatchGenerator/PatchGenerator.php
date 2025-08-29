@@ -103,28 +103,20 @@ class PatchGenerator
 
     public function generate(): string
     {
-        try {
-            $this->verifyJiraConnection();
-            $this->fetchJiraTicket();
+        $this->verifyJiraConnection();
+        $this->fetchJiraTicket();
+        if (empty($this->gitPrs)) {
+            echo PHP_EOL . "Collecting PRs from ticket {$this->ticketId}:" . PHP_EOL;
+            echo str_repeat("-", 80) . PHP_EOL;
+            $this->gitPrs = $this->jiraResponse['fields'][$this->env['JIRA_FIELD_PULL_REQUEST']] ?? '';
+            echo $this->gitPrs . PHP_EOL;
+            echo str_repeat("-", 80) . PHP_EOL . PHP_EOL;
             if (empty($this->gitPrs)) {
-                echo PHP_EOL . "Collecting PRs from ticket {$this->ticketId}:" . PHP_EOL;
-                echo str_repeat("-", 80) . PHP_EOL;
-                $this->gitPrs = $this->jiraResponse['fields'][$this->env['JIRA_FIELD_PULL_REQUEST']] ?? '';
-                echo $this->gitPrs . PHP_EOL;
-                echo str_repeat("-", 80) . PHP_EOL . PHP_EOL;
-                if (empty($this->gitPrs)) {
-                    throw new Exception('No pull request URLs found in the ticket. Use -g to specify git PRs.');
-                }
+                throw new Exception('No pull request URLs found in the ticket. Use -g to specify git PRs.');
             }
-
-            $prUrls = $this->convertToGitApiUrls($this->gitPrs);
-
-            $composerPatchFile = $this->downloadAndCreatePatches($prUrls);
-        } catch (Exception $e) {
-            $this->cleanup();
-            throw $e;
         }
-
+        $prUrls = $this->convertToGitApiUrls($this->gitPrs);
+        $composerPatchFile = $this->downloadAndCreatePatches($prUrls);
         return $composerPatchFile;
     }
 
@@ -274,9 +266,19 @@ class PatchGenerator
         }
         file_put_contents($gitPatchFile, $content);
 
-        $this->convertToComposer($gitPatchFile, $composerPatchFile);
-        $this->cleanupTemporaryFiles($gitPatchFile);
+        try {
+            $this->convertToComposer($gitPatchFile, $composerPatchFile);
+        } catch (Exception $e) {
+            echo "\033[33mWarning: Failed to convert.\033[0m" . PHP_EOL;
+            if (file_exists($composerPatchFile)) {
+                unlink($composerPatchFile);
+            }
+            throw $e;
+        }
         # Re-create the git patch file with the correct file paths
+        if (file_exists($gitPatchFile)) {
+            unlink($gitPatchFile);
+        }
         $this->convertToComposer($composerPatchFile, $gitPatchFile, true);
 
         return $composerPatchFile;
@@ -326,8 +328,6 @@ class PatchGenerator
         }
 
         $branchName = $prData['head']['ref'] ?? '';
-
-        // Now get the PR diff content
         curl_setopt_array($ch, [
             CURLOPT_URL => $url,
             CURLOPT_HTTPHEADER => [
@@ -409,41 +409,5 @@ class PatchGenerator
         }
 
         echo "Patch file created: {$toPatchFile}" . PHP_EOL;
-    }
-
-    private function cleanupTemporaryFiles(string $gitPatchFile): void
-    {
-        if (file_exists($gitPatchFile)) {
-            unlink($gitPatchFile);
-        }
-    }
-
-    private function mapEnvironmentType(string $envType): string
-    {
-        $envType = strtolower(trim($envType));
-
-        return match ($envType) {
-            'production', 'prod', 'prd' => 'production',
-            'staging', 'stage', 'stg' => 'staging',
-            'development', 'integration' => 'integration',
-            default => throw new Exception("Unsupported environment type: {$envType}. Expected: Production, Staging, or Development")
-        };
-    }
-
-    private function cleanup(): void
-    {
-        $version = $this->jiraResponse['fields']['versions'][0]['name'] ?? '';
-        if ($version) {
-            $files = [
-                $this->getPatchFilename($version, '.git.patch'),
-                $this->getPatchFilename($version, '.patch')
-            ];
-
-            foreach ($files as $file) {
-                if (file_exists($file)) {
-                    unlink($file);
-                }
-            }
-        }
     }
 }
